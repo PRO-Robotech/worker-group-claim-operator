@@ -1,0 +1,14 @@
+apiVersion: workergroup.in-cloud.io/v1alpha1
+kind: WGBootstrapTemplate
+metadata:
+  name: e2e-bootstrap-tmpl
+spec:
+  value: |
+    apiVersion: bootstrap.cluster.x-k8s.io/v1beta2
+    kind: KubeadmConfigTemplate
+    spec:
+      template:
+        spec:
+          joinConfiguration:
+            nodeRegistration:
+              name: '{{ "{{ ds.meta_data.local_hostname }}" }}'

@@ -1,0 +1,22 @@
+apiVersion: workergroup.in-cloud.io/v1alpha1
+kind: WGMachineTemplate
+metadata:
+  labels:
+    app.kubernetes.io/name: worker-group-claim-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: wgmachinetemplate-sample
+spec:
+  value: |
+    apiVersion: infrastructure.cluster.x-k8s.io/v1beta2
+    kind: BegetMachineTemplate
+    spec:
+      template:
+        spec:
+          configuration:
+            cpuCount: {{ .cpuCount }}
+            memory: {{ .memory }}
+            diskSize: 61440
+          image: "ubuntu-22.04"
+          sshKeyIds:
+            - 123
+          usePrivateNetwork: true
