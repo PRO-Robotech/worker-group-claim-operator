@@ -1,0 +1,176 @@
+version: "2"
+
+run:
+  allow-parallel-runners: true
+
+linters:
+  # Standard preset: errcheck, govet, ineffassign, staticcheck (includes gosimple), unused
+  default: standard
+
+  enable:
+    # Error handling
+    - errorlint    # Correct error wrapping (%w) and comparison (errors.Is/As)
+    - noctx        # Require context.Context in HTTP requests
+
+    # Security
+    - gosec        # Security-oriented checks
+
+    # Code quality
+    - gocritic     # Opinionated checks for bugs, performance, style
+    - revive       # Extensible replacement for golint
+    - unconvert    # Remove unnecessary type conversions
+    - unparam      # Find unused function parameters
+
+    # Complexity
+    - gocognit     # Cognitive complexity
+    - gocyclo      # Cyclomatic complexity
+    - funlen       # Function length limits
+
+    # Performance
+    - prealloc     # Suggest slice preallocations
+
+    # Style
+    - misspell     # Catch common English misspellings
+    - goconst      # Find repeated strings → constants
+    - dupl         # Detect code duplication
+    - whitespace   # Detect leading/trailing whitespace issues
+    - nlreturn     # Blank line before return/branch statements
+
+    # Safety
+    - nilerr          # nil error returns when err != nil
+    - nilnil          # nil, nil returns
+    - forcetypeassert # unsafe type assertions
+    - nolintlint      # stale/invalid nolint directives
+
+    # Performance & Style
+    - perfsprint      # fmt.Errorf → errors.New for static strings
+    - predeclared     # shadowing builtins (copy, len, etc.)
+    - modernize       # interface{} → any, maps.Copy, etc.
+    - nestif          # deeply nested ifs
+    - nakedret        # naked returns in long functions
+    - copyloopvar     # loop variable copies
+    - intrange        # integer range loops
+
+    # Test quality
+    - usetesting      # testing package correctness
+    - thelper          # t.Helper() in test helpers
+
+    # Preventive
+    - dupword         # duplicate words in comments
+    - usestdlibvars   # prefer stdlib constants
+    - reassign        # prevent package var reassignment
+    - wastedassign    # unused assignments
+    - recvcheck       # receiver consistency
+    - fatcontext      # nested contexts in loops
+
+    # Project-specific
+    - ginkgolinter    # Ginkgo/Gomega style checks
+
+  settings:
+    funlen:
+      lines: 100
+      statements: 60
+
+    gocognit:
+      min-complexity: 20
+
+    gocyclo:
+      min-complexity: 12
+
+    goconst:
+      min-occurrences: 3
+
+    dupl:
+      threshold: 120
+
+    nestif:
+      min-complexity: 4
+
+    nakedret:
+      max-func-lines: 3
+
+    errcheck:
+      check-type-assertions: true
+
+    govet:
+      enable-all: true
+      disable:
+        - shadow         # Too noisy for K8s code with err/ctx reuse
+        - fieldalignment # K8s structs prioritize readability over packing
+
+    revive:
+      rules:
+        - name: unused-parameter
+          disabled: true   # K8s interfaces require specific signatures
+        - name: exported
+          disabled: true   # Excessive for internal packages
+        - name: package-comments
+          disabled: true
+        - name: comment-spacings
+        - name: import-shadowing
+
+    gosec:
+      excludes:
+        - G101           # False positives on "token" in K8s API code
+
+    prealloc:
+      simple: true
+      range-loops: true
+      for-loops: false
+
+  exclusions:
+    generated: lax
+
+    paths:
+      - vendor
+      - '\.claude'
+      - '\.idea'
+
+    rules:
+      # Relax complexity/security/context checks in tests
+      - path: '_test\.go'
+        linters:
+          - funlen
+          - gocognit
+          - gocyclo
+          - gosec
+          - dupl
+          - goconst
+          - noctx
+          - errcheck
+          - nilerr
+          - nestif
+          - forcetypeassert
+          - fatcontext
+
+      # Test utilities (not _test.go but in test/ directory)
+      - path: 'test/'
+        linters:
+          - gosec
+          - noctx
+
+      # K8s API types follow K8s conventions
+      - path: 'api/'
+        linters:
+          - modernize
+
+      # Allow unchecked Close() in deferred calls
+      - text: 'Error return value of .*(Close|Flush|Remove).*is not checked'
+        linters:
+          - errcheck
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+
+  settings:
+    goimports:
+      local-prefixes:
+        - addons-operator
+
+  exclusions:
+    generated: lax
+    paths:
+      - vendor
+      - '\.claude'

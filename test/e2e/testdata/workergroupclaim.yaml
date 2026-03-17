@@ -1,0 +1,16 @@
+apiVersion: workergroup.in-cloud.io/v1alpha1
+kind: WorkerGroupClaim
+metadata:
+  name: e2e-pool
+  namespace: e2e-test
+spec:
+  clusterName: e2e-cluster
+  replicas: 2
+  version: "v1.30.1"
+  machineTemplateRef:
+    name: e2e-machine-tmpl
+  bootstrapTemplateRef:
+    name: e2e-bootstrap-tmpl
+  infrastructure:
+    cpuCount: 4
+    memory: 8192

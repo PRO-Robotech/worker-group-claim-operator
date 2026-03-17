@@ -1,0 +1,6 @@
+## Append samples of your project ##
+resources:
+- workergroup_v1alpha1_workergroupclaim.yaml
+- workergroup_v1alpha1_wgbootstraptemplate.yaml
+- workergroup_v1alpha1_wgmachinetemplate.yaml
+# +kubebuilder:scaffold:manifestskustomizesamples
