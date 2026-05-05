@@ -166,6 +166,16 @@ func (r *WorkerGroupClaimReconciler) Reconcile(ctx context.Context, req ctrl.Req
 			claim.Status.PendingDeletion = appendResourceRef(
 				claim.Status.PendingDeletion, v1alpha1.KindKCT, oldKCT)
 		}
+
+		filtered := make([]v1alpha1.ResourceRef, 0, len(claim.Status.PendingDeletion))
+		for _, ref := range claim.Status.PendingDeletion {
+			if (ref.Kind == v1alpha1.KindBMT && ref.Name == bmtName) ||
+				(ref.Kind == v1alpha1.KindKCT && ref.Name == kctName) {
+				continue
+			}
+			filtered = append(filtered, ref)
+		}
+		claim.Status.PendingDeletion = filtered
 	}
 
 	// 10. Ensure MachineDeployment
