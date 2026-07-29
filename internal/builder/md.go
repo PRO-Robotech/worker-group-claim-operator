@@ -23,10 +23,14 @@ func BuildMachineDeployment(
 		v1alpha1.LabelClaimName:   claim.Name,
 	}
 
-	// Template labels = system + user nodeLabels
+	// Template labels = user nodeLabels, then system labels on top: a user label
+	// must never shadow a selector key or a CAPI-owned bookkeeping key.
 	templateLabels := make(map[string]string, len(selectorLabels)+len(nodeLabels))
-	maps.Copy(templateLabels, selectorLabels)
 	maps.Copy(templateLabels, nodeLabels)
+	delete(templateLabels, clusterv1.MachineDeploymentUniqueLabel)
+	delete(templateLabels, clusterv1.MachineDeploymentNameLabel)
+	delete(templateLabels, clusterv1.MachineSetNameLabel)
+	maps.Copy(templateLabels, selectorLabels)
 
 	md := &clusterv1.MachineDeployment{
 		ObjectMeta: metav1.ObjectMeta{

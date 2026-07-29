@@ -5,6 +5,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 
 	v1alpha1 "github.com/pointpu/worker-group-claim-operator/api/v1alpha1"
 )
@@ -136,6 +137,40 @@ func TestBuildMachineDeployment_UsesPassedLabelsNotClaimSpec(t *testing.T) {
 	}
 	if md.Spec.Template.Labels["environment"] != "prod" {
 		t.Error("missing environment label in template")
+	}
+}
+
+func TestBuildMachineDeployment_SystemLabelsWin(t *testing.T) {
+	claim := testClaim()
+	hijack := map[string]string{
+		v1alpha1.LabelClusterName:              "evil",
+		v1alpha1.LabelClaimName:                "evil",
+		clusterv1.MachineDeploymentUniqueLabel: "evil",
+		clusterv1.MachineDeploymentNameLabel:   "evil",
+		clusterv1.MachineSetNameLabel:          "evil",
+		"app":                                  "nginx",
+	}
+
+	md := BuildMachineDeployment(claim, hijack, "bmt", "kct")
+
+	labels := md.Spec.Template.Labels
+	if labels[v1alpha1.LabelClusterName] != "my-cluster" {
+		t.Errorf("cluster-name = %q, system label must win", labels[v1alpha1.LabelClusterName])
+	}
+	if labels[v1alpha1.LabelClaimName] != claim.Name {
+		t.Errorf("claim-name = %q, system label must win", labels[v1alpha1.LabelClaimName])
+	}
+	for _, key := range []string{
+		clusterv1.MachineDeploymentUniqueLabel,
+		clusterv1.MachineDeploymentNameLabel,
+		clusterv1.MachineSetNameLabel,
+	} {
+		if _, exists := labels[key]; exists {
+			t.Errorf("CAPI-owned key %q must be stripped from the template", key)
+		}
+	}
+	if labels["app"] != "nginx" {
+		t.Error("regular user label must survive")
 	}
 }
 
