@@ -89,6 +89,32 @@ spec:
                 x-kubernetes-validations:
                 - message: clusterName is immutable
                   rule: self == oldSelf
+              deletion:
+                description: |-
+                  Deletion configures timeouts for Machine deletion (drain, volume detach, node deletion).
+                  Maps to MachineDeployment.spec.template.spec.deletion.
+                  If not set, defaults are applied: nodeDrainTimeoutSeconds=60, nodeVolumeDetachTimeoutSeconds=60, nodeDeletionTimeoutSeconds=120.
+                  In-place MD update — does NOT trigger rollout.
+                properties:
+                  nodeDeletionTimeoutSeconds:
+                    description: 'NodeDeletionTimeoutSeconds is the total time to
+                      attempt Node deletion. Default: 120.'
+                    format: int32
+                    minimum: 0
+                    type: integer
+                  nodeDrainTimeoutSeconds:
+                    description: 'NodeDrainTimeoutSeconds is the total time to spend
+                      draining a node. Default: 60.'
+                    format: int32
+                    minimum: 0
+                    type: integer
+                  nodeVolumeDetachTimeoutSeconds:
+                    description: 'NodeVolumeDetachTimeoutSeconds is the total time
+                      to wait for volumes to detach. Default: 60.'
+                    format: int32
+                    minimum: 0
+                    type: integer
+                type: object
               infrastructure:
                 additionalProperties:
                   x-kubernetes-preserve-unknown-fields: true
@@ -165,9 +191,6 @@ spec:
                 required:
                 - name
                 type: object
-              nodeDrainTimeout:
-                description: NodeDrainTimeout is the duration to wait for node drain.
-                type: string
               nodeLabels:
                 additionalProperties:
                   type: string
