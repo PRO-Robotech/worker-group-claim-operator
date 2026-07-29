@@ -11,7 +11,7 @@ import (
 
 func TestBuildMachineDeployment_Basic(t *testing.T) {
 	claim := testClaim()
-	md := BuildMachineDeployment(claim, "bmt-abc", "kct-def")
+	md := BuildMachineDeployment(claim, claim.Spec.NodeLabels, "bmt-abc", "kct-def")
 
 	// Name
 	if md.Name != "my-cluster-pool-1" {
@@ -84,7 +84,7 @@ func TestBuildMachineDeployment_WithTaints(t *testing.T) {
 		},
 	}
 
-	md := BuildMachineDeployment(claim, "bmt", "kct")
+	md := BuildMachineDeployment(claim, claim.Spec.NodeLabels, "bmt", "kct")
 
 	if len(md.Spec.Template.Spec.Taints) != 2 {
 		t.Fatalf("taints len = %d, want 2", len(md.Spec.Template.Spec.Taints))
@@ -104,7 +104,7 @@ func TestBuildMachineDeployment_WithNodeLabels(t *testing.T) {
 		"zone":        "eu-west-1",
 	}
 
-	md := BuildMachineDeployment(claim, "bmt", "kct")
+	md := BuildMachineDeployment(claim, claim.Spec.NodeLabels, "bmt", "kct")
 
 	labels := md.Spec.Template.Labels
 	if labels["environment"] != "prod" {
@@ -116,6 +116,26 @@ func TestBuildMachineDeployment_WithNodeLabels(t *testing.T) {
 	// System labels still present
 	if labels[v1alpha1.LabelClusterName] != "my-cluster" {
 		t.Error("missing system cluster-name label")
+	}
+}
+
+func TestBuildMachineDeployment_UsesPassedLabelsNotClaimSpec(t *testing.T) {
+	claim := testClaim()
+	claim.Spec.NodeLabels = map[string]string{
+		"environment":                   "prod",
+		"cluster.x-k8s.io/cluster-name": "hijacked",
+	}
+	sanitized := map[string]string{"environment": "prod"}
+
+	md := BuildMachineDeployment(claim, sanitized, "bmt", "kct")
+
+	if _, exists := md.Spec.Template.Labels["cluster.x-k8s.io/cluster-name"]; exists {
+		if md.Spec.Template.Labels["cluster.x-k8s.io/cluster-name"] == "hijacked" {
+			t.Error("dropped label leaked from claim.Spec.NodeLabels into the MD template")
+		}
+	}
+	if md.Spec.Template.Labels["environment"] != "prod" {
+		t.Error("missing environment label in template")
 	}
 }
 
@@ -132,7 +152,7 @@ func TestBuildMachineDeployment_WithStrategy(t *testing.T) {
 		},
 	}
 
-	md := BuildMachineDeployment(claim, "bmt", "kct")
+	md := BuildMachineDeployment(claim, claim.Spec.NodeLabels, "bmt", "kct")
 
 	if string(md.Spec.Rollout.Strategy.Type) != "RollingUpdate" {
 		t.Errorf("strategy.type = %s", md.Spec.Rollout.Strategy.Type)
@@ -151,7 +171,7 @@ func TestBuildMachineDeployment_WithStrategy(t *testing.T) {
 func TestBuildMachineDeployment_DeletionDefaults(t *testing.T) {
 	claim := testClaim()
 	// No spec.deletion — should use hardcoded defaults
-	md := BuildMachineDeployment(claim, "bmt", "kct")
+	md := BuildMachineDeployment(claim, claim.Spec.NodeLabels, "bmt", "kct")
 
 	if md.Spec.Template.Spec.Deletion.NodeDrainTimeoutSeconds == nil {
 		t.Fatal("nodeDrainTimeoutSeconds is nil")
@@ -180,7 +200,7 @@ func TestBuildMachineDeployment_DeletionOverrides(t *testing.T) {
 		NodeDrainTimeoutSeconds: &drain,
 	}
 
-	md := BuildMachineDeployment(claim, "bmt", "kct")
+	md := BuildMachineDeployment(claim, claim.Spec.NodeLabels, "bmt", "kct")
 
 	if *md.Spec.Template.Spec.Deletion.NodeDrainTimeoutSeconds != 300 {
 		t.Errorf("nodeDrainTimeoutSeconds = %d, want 300", *md.Spec.Template.Spec.Deletion.NodeDrainTimeoutSeconds)
@@ -197,7 +217,7 @@ func TestBuildMachineDeployment_DeletionOverrides(t *testing.T) {
 func TestBuildMachineDeployment_NilOptionals(t *testing.T) {
 	claim := testClaim()
 	// No taints, no strategy, no nodeLabels
-	md := BuildMachineDeployment(claim, "bmt", "kct")
+	md := BuildMachineDeployment(claim, claim.Spec.NodeLabels, "bmt", "kct")
 
 	if len(md.Spec.Template.Spec.Taints) != 0 {
 		t.Errorf("taints should be empty, got %d", len(md.Spec.Template.Spec.Taints))

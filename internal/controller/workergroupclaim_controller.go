@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
@@ -107,13 +108,15 @@ func (r *WorkerGroupClaimReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		return ctrl.Result{}, err
 	}
 
-	// 4. Validate nodeLabels
-	if err := validation.ValidateNodeLabels(claim.Spec.NodeLabels); err != nil {
+	// 4. Sanitize nodeLabels
+	nodeLabels, rejectedLabels, err := validation.SanitizeNodeLabels(claim.Spec.NodeLabels)
+	if err != nil {
 		return r.setFailed(ctx, claim, "NodeLabelsInvalid", err.Error())
 	}
+	r.setNodeLabelsAcceptedCondition(claim, rejectedLabels)
 
 	// 5. Render templates
-	bmtYAML, kctYAML, err := r.renderTemplates(ctx, claim)
+	bmtYAML, kctYAML, err := r.renderTemplates(ctx, claim, nodeLabels)
 	if err != nil {
 		return r.setFailed(ctx, claim, "RenderError", err.Error())
 	}
@@ -179,7 +182,7 @@ func (r *WorkerGroupClaimReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	}
 
 	// 10. Ensure MachineDeployment
-	mdUpdated, err := r.ensureMachineDeployment(ctx, claim, bmtName, kctName)
+	mdUpdated, err := r.ensureMachineDeployment(ctx, claim, nodeLabels, bmtName, kctName)
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("ensure MD: %w", err)
 	}
@@ -647,7 +650,7 @@ func isPaused(claim *v1alpha1.WorkerGroupClaim) bool {
 
 // renderTemplates loads templates, prepares vars, injects auto-vars, and renders.
 func (r *WorkerGroupClaimReconciler) renderTemplates(
-	ctx context.Context, claim *v1alpha1.WorkerGroupClaim,
+	ctx context.Context, claim *v1alpha1.WorkerGroupClaim, nodeLabels map[string]string,
 ) (bmtYAML, kctYAML string, err error) {
 	// Load WGMachineTemplate
 	machineTemplate := &v1alpha1.WGMachineTemplate{}
@@ -690,7 +693,7 @@ func (r *WorkerGroupClaimReconciler) renderTemplates(
 	}
 
 	// Auto-inject nodeLabels and machineDeploymentName
-	renderer.InjectNodeLabels(bootstrapVars, claim.Spec.NodeLabels)
+	renderer.InjectNodeLabels(bootstrapVars, nodeLabels)
 	renderer.InjectMachineDeploymentName(bootstrapVars, claim.Spec.ClusterName, claim.Name)
 
 	// Inject kubeletConfigYaml
@@ -815,11 +818,12 @@ func (r *WorkerGroupClaimReconciler) ensureKCT(
 // ensureMachineDeployment creates or updates the MachineDeployment. Returns true if updated.
 func (r *WorkerGroupClaimReconciler) ensureMachineDeployment(
 	ctx context.Context, claim *v1alpha1.WorkerGroupClaim,
+	nodeLabels map[string]string,
 	bmtName, kctName string,
 ) (bool, error) {
 	mdName := builder.MachineDeploymentName(claim.Spec.ClusterName, claim.Name)
 
-	desired := builder.BuildMachineDeployment(claim, bmtName, kctName)
+	desired := builder.BuildMachineDeployment(claim, nodeLabels, bmtName, kctName)
 
 	existing := &clusterv1.MachineDeployment{}
 	err := r.Get(ctx, types.NamespacedName{Name: mdName, Namespace: claim.Namespace}, existing)
@@ -854,6 +858,29 @@ func (r *WorkerGroupClaimReconciler) ensureMachineDeployment(
 	}
 
 	return true, nil
+}
+
+// setNodeLabelsAcceptedCondition reports which nodeLabels were dropped for using a
+// reserved prefix. Dropping is not an error: the rest of the group keeps reconciling.
+func (r *WorkerGroupClaimReconciler) setNodeLabelsAcceptedCondition(
+	claim *v1alpha1.WorkerGroupClaim, rejected []string,
+) {
+	cond := metav1.Condition{
+		Type:               v1alpha1.ConditionNodeLabelsAccepted,
+		Status:             metav1.ConditionTrue,
+		Reason:             "AllLabelsAccepted",
+		Message:            "All nodeLabels accepted",
+		ObservedGeneration: claim.Generation,
+	}
+
+	if len(rejected) != 0 {
+		cond.Status = metav1.ConditionFalse
+		cond.Reason = "ReservedPrefixesDropped"
+		cond.Message = fmt.Sprintf("Dropped nodeLabels with reserved prefixes: %s", strings.Join(rejected, ", "))
+		r.Recorder.Event(claim, "Warning", cond.Reason, cond.Message)
+	}
+
+	meta.SetStatusCondition(&claim.Status.Conditions, cond)
 }
 
 // setFailed sets the claim to Failed phase with condition and returns a delayed requeue.

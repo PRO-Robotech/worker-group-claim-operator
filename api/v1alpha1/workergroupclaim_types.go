@@ -41,6 +41,8 @@ const (
 	ConditionRolloutComplete   = "RolloutComplete"
 	ConditionRolloutTimedOut   = "RolloutTimedOut"
 	ConditionPaused            = "Paused"
+
+	ConditionNodeLabelsAccepted = "NodeLabelsAccepted"
 )
 
 // Finalizer for cleanup on deletion.
@@ -110,8 +112,10 @@ type WorkerGroupClaimSpec struct {
 	// NodeLabels are labels applied to Kubernetes nodes.
 	// Dual effect: added to MD template labels AND auto-injected as
 	// "nodeLabels" bootstrap var (format: "k1=v1,k2=v2", sorted keys).
-	// Reserved prefixes (cluster.x-k8s.io/, workergroup.in-cloud.io/,
-	// node-group.beget.com/) are rejected by validation.
+	// Keys using reserved prefixes (cluster.x-k8s.io/, workergroup.in-cloud.io/,
+	// node-group.beget.com/, node.cluster.x-k8s.io/, node-restriction.kubernetes.io/)
+	// are ignored — see the NodeLabelsAccepted condition.
+	// Syntactically invalid keys or values fail the claim.
 	// +optional
 	NodeLabels map[string]string `json:"nodeLabels,omitempty"`
 

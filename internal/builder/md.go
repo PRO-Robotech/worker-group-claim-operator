@@ -12,6 +12,7 @@ import (
 // BuildMachineDeployment constructs a MachineDeployment from WorkerGroupClaim spec.
 func BuildMachineDeployment(
 	claim *v1alpha1.WorkerGroupClaim,
+	nodeLabels map[string]string,
 	bmtName, kctName string,
 ) *clusterv1.MachineDeployment {
 	mdName := MachineDeploymentName(claim.Spec.ClusterName, claim.Name)
@@ -23,9 +24,9 @@ func BuildMachineDeployment(
 	}
 
 	// Template labels = system + user nodeLabels
-	templateLabels := make(map[string]string, len(selectorLabels)+len(claim.Spec.NodeLabels))
+	templateLabels := make(map[string]string, len(selectorLabels)+len(nodeLabels))
 	maps.Copy(templateLabels, selectorLabels)
-	maps.Copy(templateLabels, claim.Spec.NodeLabels)
+	maps.Copy(templateLabels, nodeLabels)
 
 	md := &clusterv1.MachineDeployment{
 		ObjectMeta: metav1.ObjectMeta{
