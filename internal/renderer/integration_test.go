@@ -265,6 +265,28 @@ func TestIntegration_KCTHashChangesOnNodeLabelsChange(t *testing.T) {
 	}
 }
 
+func TestIntegration_KCTRendersWithEmptyNodeLabels(t *testing.T) {
+	vars, err := renderer.PrepareVars(map[string]apiextensionsv1.JSON{
+		"clusterDNS":    rawJSON(`"29.64.0.10"`),
+		"clusterDomain": rawJSON(`"cluster.local"`),
+	})
+	if err != nil {
+		t.Fatalf("PrepareVars: %v", err)
+	}
+
+	renderer.InjectNodeLabels(vars, nil)
+	renderer.InjectMachineDeploymentName(vars, "cluster", "pool")
+	vars["kubeletConfigYaml"] = ""
+
+	rendered, err := renderer.Render(kctTemplate, vars)
+	if err != nil {
+		t.Fatalf("Render with empty nodeLabels: %v", err)
+	}
+	if !strings.Contains(rendered, `node-labels: ",node-group.beget.com/name=cluster-pool"`) {
+		t.Errorf("expected leading-comma node-labels value:\n%s", rendered)
+	}
+}
+
 func TestIntegration_SshKeyIdsAsYamlList(t *testing.T) {
 	v := allBMTVars()
 	v["sshKeyIds"] = rawJSON(`[123, 456, 789]`)

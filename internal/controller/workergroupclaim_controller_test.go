@@ -1413,6 +1413,42 @@ spec:
 				"active BMT should NOT be deleted")
 		})
 	})
+
+	Context("Node labels rendering", func() {
+		It("should reconcile to Ready when a template references .nodeLabels and the claim has none", func() {
+			ns := createNamespace("test-empty-nodelabels")
+
+			machineTmpl := &v1alpha1.WGMachineTemplate{
+				ObjectMeta: metav1.ObjectMeta{Name: "machine-tmpl-" + ns},
+				Spec:       v1alpha1.WGMachineTemplateSpec{Value: bmtTemplateContent()},
+			}
+			Expect(k8sClient.Create(ctx, machineTmpl)).To(Succeed())
+
+			bootstrapTmpl := &v1alpha1.WGBootstrapTemplate{
+				ObjectMeta: metav1.ObjectMeta{Name: "bootstrap-tmpl-" + ns},
+				Spec:       v1alpha1.WGBootstrapTemplateSpec{Value: kctTemplateContentWithNodeLabels()},
+			}
+			Expect(k8sClient.Create(ctx, bootstrapTmpl)).To(Succeed())
+
+			claim := newClaim("pool-nolabels", ns, "nolabels-cluster")
+			Expect(k8sClient.Create(ctx, claim)).To(Succeed())
+
+			Eventually(func() string {
+				fetched := &v1alpha1.WorkerGroupClaim{}
+				if err := k8sClient.Get(ctx, claimKey("pool-nolabels", ns), fetched); err != nil {
+					return ""
+				}
+
+				return fetched.Status.Phase
+			}, timeout, interval).Should(Equal(v1alpha1.PhaseReady))
+
+			fetched := &v1alpha1.WorkerGroupClaim{}
+			Expect(k8sClient.Get(ctx, claimKey("pool-nolabels", ns), fetched)).To(Succeed())
+			renderedCond := findCondition(fetched.Status.Conditions, v1alpha1.ConditionTemplatesRendered)
+			Expect(renderedCond).NotTo(BeNil())
+			Expect(renderedCond.Status).To(Equal(metav1.ConditionTrue))
+		})
+	})
 })
 
 // Helper functions
@@ -1502,6 +1538,20 @@ spec:
     spec:
       joinConfiguration:
         nodeRegistration:
+          name: '{{ "{{ ds.meta_data.local_hostname }}" }}'`
+}
+
+func kctTemplateContentWithNodeLabels() string {
+	return `apiVersion: bootstrap.cluster.x-k8s.io/v1beta2
+kind: KubeadmConfigTemplate
+spec:
+  template:
+    spec:
+      joinConfiguration:
+        nodeRegistration:
+          kubeletExtraArgs:
+            - name: node-labels
+              value: "{{ .nodeLabels }}"
           name: '{{ "{{ ds.meta_data.local_hostname }}" }}'`
 }
 

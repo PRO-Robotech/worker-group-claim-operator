@@ -8,11 +8,9 @@ import (
 
 // InjectNodeLabels auto-injects a "nodeLabels" variable into vars
 // as a sorted "k1=v1,k2=v2" string, unless already explicitly set.
-// Does nothing if nodeLabels map is empty.
+// An empty or nil map injects "", so the variable is always defined
+// for templates rendered with missingkey=error.
 func InjectNodeLabels(vars map[string]any, nodeLabels map[string]string) {
-	if len(nodeLabels) == 0 {
-		return
-	}
 	if _, exists := vars["nodeLabels"]; exists {
 		return
 	}

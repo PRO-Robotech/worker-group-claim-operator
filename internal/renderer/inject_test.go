@@ -36,15 +36,20 @@ func TestInjectNodeLabels_NoOverwrite(t *testing.T) {
 }
 
 func TestInjectNodeLabels_Empty(t *testing.T) {
-	vars := make(map[string]any)
-	InjectNodeLabels(vars, nil)
-	if _, exists := vars["nodeLabels"]; exists {
-		t.Error("nodeLabels should not be injected for nil labels")
-	}
+	for name, labels := range map[string]map[string]string{
+		"nil":   nil,
+		"empty": {},
+	} {
+		vars := make(map[string]any)
+		InjectNodeLabels(vars, labels)
 
-	InjectNodeLabels(vars, map[string]string{})
-	if _, exists := vars["nodeLabels"]; exists {
-		t.Error("nodeLabels should not be injected for empty labels")
+		got, ok := vars["nodeLabels"].(string)
+		if !ok {
+			t.Fatalf("%s: nodeLabels type = %T, want string", name, vars["nodeLabels"])
+		}
+		if got != "" {
+			t.Errorf("%s: nodeLabels = %q, want empty string", name, got)
+		}
 	}
 }
 
