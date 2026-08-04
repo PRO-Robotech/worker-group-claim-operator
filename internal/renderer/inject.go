@@ -6,10 +6,7 @@ import (
 	"strings"
 )
 
-// InjectNodeLabels auto-injects a "nodeLabels" variable into vars
-// as a sorted "k1=v1,k2=v2" string, unless already explicitly set.
-// An empty or nil map injects "", so the variable is always defined
-// for templates rendered with missingkey=error.
+// InjectNodeLabels injects a sorted "k1=v1,k2=v2" string, unless already set; empty map injects "".
 func InjectNodeLabels(vars map[string]any, nodeLabels map[string]string) {
 	if _, exists := vars["nodeLabels"]; exists {
 		return

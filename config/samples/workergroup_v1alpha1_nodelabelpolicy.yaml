@@ -1,0 +1,14 @@
+# Singleton: only the object named "default" is read.
+apiVersion: workergroup.in-cloud.io/v1alpha1
+kind: NodeLabelPolicy
+metadata:
+  name: default
+  labels:
+    app.kubernetes.io/name: worker-group-claim-operator
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  denyPatterns:
+  - cluster\.x-k8s\.io/.*
+  - node\.cluster\.x-k8s\.io/.*
+  - workergroup\.in-cloud\.io/.*
+  - node-restriction\.kubernetes\.io/.*

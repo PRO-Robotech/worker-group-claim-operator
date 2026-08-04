@@ -12,6 +12,14 @@ rules:
   - create
   - patch
 - apiGroups:
+  - ""
+  resources:
+  - secrets
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
   - bootstrap.cluster.x-k8s.io
   resources:
   - kubeadmconfigtemplates
@@ -37,6 +45,7 @@ rules:
 - apiGroups:
   - cluster.x-k8s.io
   resources:
+  - machines
   - machinesets
   verbs:
   - get
@@ -55,12 +64,22 @@ rules:
 - apiGroups:
   - workergroup.in-cloud.io
   resources:
+  - nodelabelpolicies
   - wgbootstraptemplates
   - wgmachinetemplates
   verbs:
   - get
   - list
   - watch
+- apiGroups:
+  - workergroup.in-cloud.io
+  resources:
+  - nodelabelpolicies/status
+  - workergroupclaims/status
+  verbs:
+  - get
+  - patch
+  - update
 - apiGroups:
   - workergroup.in-cloud.io
   resources:
@@ -78,12 +97,4 @@ rules:
   resources:
   - workergroupclaims/finalizers
   verbs:
-  - update
-- apiGroups:
-  - workergroup.in-cloud.io
-  resources:
-  - workergroupclaims/status
-  verbs:
-  - get
-  - patch
   - update

@@ -23,8 +23,7 @@ func BuildMachineDeployment(
 		v1alpha1.LabelClaimName:   claim.Name,
 	}
 
-	// Template labels = user nodeLabels, then system labels on top: a user label
-	// must never shadow a selector key or a CAPI-owned bookkeeping key.
+	// System labels go on top: a user label must not shadow a selector or CAPI key.
 	templateLabels := make(map[string]string, len(selectorLabels)+len(nodeLabels))
 	maps.Copy(templateLabels, nodeLabels)
 	delete(templateLabels, clusterv1.MachineDeploymentUniqueLabel)

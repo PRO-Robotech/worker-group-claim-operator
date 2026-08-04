@@ -4,6 +4,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/pointpu/worker-group-claim-operator/internal/nodelabels"
 )
 
 func TestSanitizeNodeLabels(t *testing.T) {
@@ -63,7 +65,7 @@ func TestSanitizeNodeLabels(t *testing.T) {
 
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
-			accepted, rejected, err := SanitizeNodeLabels(tt.labels)
+			accepted, rejected, err := SanitizeNodeLabels(tt.labels, nodelabels.NewClaimPolicy(nil))
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -94,7 +96,7 @@ func TestSanitizeNodeLabels_InvalidSyntax(t *testing.T) {
 
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
-			accepted, rejected, err := SanitizeNodeLabels(tt.labels)
+			accepted, rejected, err := SanitizeNodeLabels(tt.labels, nodelabels.NewClaimPolicy(nil))
 			if err == nil {
 				t.Fatal("expected error for invalid label")
 			}
@@ -112,8 +114,32 @@ func TestSanitizeNodeLabels_InvalidWinsOverReserved(t *testing.T) {
 	_, _, err := SanitizeNodeLabels(map[string]string{
 		"cluster.x-k8s.io/name": "val",
 		"bad key":               "val",
-	})
+	}, nodelabels.NewClaimPolicy(nil))
 	if err == nil {
 		t.Fatal("expected error when an invalid key is present")
+	}
+}
+
+func TestSanitizeNodeLabelsHonoursPolicyFromCRD(t *testing.T) {
+	// A key allowed by the compiled-in floor must be dropped once the CRD denies it.
+	labels := map[string]string{"example.com/team": "payments", "app": "nginx"}
+
+	accepted, rejected, err := SanitizeNodeLabels(labels, nodelabels.NewClaimPolicy(nil))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(rejected) != 0 || len(accepted) != 2 {
+		t.Fatalf("without policy: accepted=%v rejected=%v", accepted, rejected)
+	}
+
+	accepted, rejected, err = SanitizeNodeLabels(labels, nodelabels.NewClaimPolicy([]string{`^example\.com/`}))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !reflect.DeepEqual(rejected, []string{"example.com/team"}) {
+		t.Errorf("rejected = %v, want [example.com/team]", rejected)
+	}
+	if !reflect.DeepEqual(accepted, map[string]string{"app": "nginx"}) {
+		t.Errorf("accepted = %v", accepted)
 	}
 }
