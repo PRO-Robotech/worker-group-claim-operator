@@ -100,3 +100,59 @@ func TestPolicyFilterEmpty(t *testing.T) {
 		t.Errorf("Filter(nil) = %v, %v; want nil, nil", allowed, refused)
 	}
 }
+
+var liveNodeSystemLabels = []string{
+	"beta.kubernetes.io/arch",
+	"beta.kubernetes.io/instance-type",
+	"beta.kubernetes.io/os",
+	"failure-domain.beta.kubernetes.io/region",
+	"failure-domain.beta.kubernetes.io/zone",
+	"kubernetes.io/arch",
+	"kubernetes.io/hostname",
+	"kubernetes.io/os",
+	"node-group.beget.com/name",
+	"node.kubernetes.io/instance-type",
+	"topology.kubernetes.io/region",
+	"topology.kubernetes.io/zone",
+}
+
+func TestRemovableNeverTouchesSystemLabels(t *testing.T) {
+	policy := NewNodePolicy([]string{`.*`})
+
+	for _, key := range liveNodeSystemLabels {
+		if policy.Removable(key) {
+			t.Errorf("Removable(%q) = true, want false", key)
+		}
+	}
+}
+
+func TestRemovableOnlyFromDenyPatterns(t *testing.T) {
+	policy := NewNodePolicy([]string{`example\.com/.*`})
+
+	if !policy.Removable("example.com/team") {
+		t.Error(`Removable("example.com/team") = false, want true`)
+	}
+	if policy.Removable("app") {
+		t.Error(`Removable("app") = true, want false`)
+	}
+}
+
+func TestRemovableEmptyPolicyRemovesNothing(t *testing.T) {
+	policy := NewNodePolicy(nil)
+
+	for _, key := range append(liveNodeSystemLabels, "app", "example.com/team") {
+		if policy.Removable(key) {
+			t.Errorf("Removable(%q) = true with no deny patterns, want false", key)
+		}
+	}
+}
+
+func TestDeniesStillRefusesSystemLabelsForWriting(t *testing.T) {
+	policy := NewNodePolicy(nil)
+
+	for _, key := range liveNodeSystemLabels {
+		if !policy.Denies(key) {
+			t.Errorf("Denies(%q) = false, want true", key)
+		}
+	}
+}

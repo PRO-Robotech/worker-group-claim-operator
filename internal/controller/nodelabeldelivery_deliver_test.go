@@ -94,25 +94,40 @@ func TestDeliverObserveOnlyDoesNotWrite(t *testing.T) {
 }
 
 func TestForeignDeniedFindsOnlyUnownedDeniedKeys(t *testing.T) {
-	policy := nodelabels.NewNodePolicy(nil)
+	policy := nodelabels.NewNodePolicy([]string{`example\.com/.*`, `node-role\.kubernetes\.io/.*`})
 
 	machine := machineWith("beget:///abc", "n1", map[string]string{
 		"node-role.kubernetes.io/role": "storage",
 	})
 	node := nodeWith("n1", "beget:///abc", map[string]string{
-		// denied by the safety list and owned by nobody we track -> removable
-		"kubernetes.io/hostname": "n1",
-		// denied, but CAPI owns it via the Machine -> must be left to CAPI
+		"kubernetes.io/hostname":       "n1",
 		"node-role.kubernetes.io/role": "storage",
-		// allowed and managed by us -> not foreign
-		"app": "nginx",
-		// allowed, planted by hand -> must be preserved
-		"node.longhorn.io/role": "storage",
+		"app":                          "nginx",
+		"node.longhorn.io/role":        "storage",
+		"example.com/team":             "payments",
 	})
 
 	got := foreignDenied(policy, machine, node, map[string]string{"app": "nginx"})
-	if len(got) != 1 || got[0] != "kubernetes.io/hostname" {
-		t.Errorf("foreignDenied() = %v, want [kubernetes.io/hostname]", got)
+	if len(got) != 1 || got[0] != "example.com/team" {
+		t.Errorf("foreignDenied() = %v, want [example.com/team]", got)
+	}
+}
+
+func TestForeignDeniedNeverRemovesSystemLabels(t *testing.T) {
+	policy := nodelabels.NewNodePolicy([]string{`.*`})
+
+	machine := machineWith("beget:///abc", "n1", nil)
+	node := nodeWith("n1", "beget:///abc", map[string]string{
+		"kubernetes.io/hostname":           "n1",
+		"kubernetes.io/arch":               "amd64",
+		"kubernetes.io/os":                 "linux",
+		"topology.kubernetes.io/zone":      "z1",
+		"node.kubernetes.io/instance-type": "std",
+		"node-group.beget.com/name":        "pool",
+	})
+
+	if got := foreignDenied(policy, machine, node, nil); len(got) != 0 {
+		t.Errorf("foreignDenied() = %v, want empty", got)
 	}
 }
 

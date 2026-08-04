@@ -283,7 +283,7 @@ func foreignDenied(
 		if _, isCAPI := capiOwned[key]; isCAPI {
 			continue
 		}
-		if policy.Denies(key) {
+		if policy.Removable(key) {
 			foreign = append(foreign, key)
 		}
 	}

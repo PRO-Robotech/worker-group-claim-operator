@@ -85,6 +85,22 @@ func (p *Policy) Denies(key string) bool {
 	return false
 }
 
+// Removable reports whether the key must be taken off a Node. Safety-floor keys never qualify.
+func (p *Policy) Removable(key string) bool {
+	for _, re := range p.safety {
+		if re.MatchString(key) {
+			return false
+		}
+	}
+	for _, re := range p.deny {
+		if re.MatchString(key) {
+			return true
+		}
+	}
+
+	return false
+}
+
 // Filter splits labels into the allowed set and the sorted refused keys.
 func (p *Policy) Filter(labels map[string]string) (map[string]string, []string) {
 	if len(labels) == 0 {
