@@ -17,6 +17,7 @@ limitations under the License.
 package main
 
 import (
+	"crypto/tls"
 	"flag"
 	"os"
 
@@ -28,6 +29,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
 	workergroupv1alpha1 "github.com/pointpu/worker-group-claim-operator/api/v1alpha1"
@@ -46,11 +48,48 @@ func init() {
 	utilruntime.Must(clusterv1.AddToScheme(scheme))
 }
 
-func main() {
-	var metricsAddr, probeAddr string
-	var enableLeaderElection, observeOnly, removeForeign bool
+type metricsConfig struct {
+	addr        string
+	secure      bool
+	enableHTTP2 bool
+	certPath    string
+	certName    string
+	certKey     string
+}
 
-	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to.")
+func (c metricsConfig) options() metricsserver.Options {
+	var tlsOpts []func(*tls.Config)
+	// HTTP/2 is off by default: GHSA-qppj-fm5r-hxr3, GHSA-4374-p667-p6c8.
+	if !c.enableHTTP2 {
+		tlsOpts = append(tlsOpts, func(cfg *tls.Config) { cfg.NextProtos = []string{"http/1.1"} })
+	}
+
+	opts := metricsserver.Options{BindAddress: c.addr, SecureServing: c.secure, TLSOpts: tlsOpts}
+	if c.secure {
+		opts.FilterProvider = filters.WithAuthenticationAndAuthorization
+	}
+	if c.certPath != "" {
+		opts.CertDir, opts.CertName, opts.KeyName = c.certPath, c.certName, c.certKey
+	}
+
+	return opts
+}
+
+func main() {
+	var probeAddr string
+	var enableLeaderElection, observeOnly, removeForeign bool
+	var metrics metricsConfig
+
+	flag.StringVar(&metrics.addr, "metrics-bind-address", "0",
+		"The address the metrics endpoint binds to. Use :8443 for HTTPS or :8080 for HTTP, or 0 to disable.")
+	flag.BoolVar(&metrics.secure, "metrics-secure", true,
+		"If set, the metrics endpoint is served securely via HTTPS with authn/authz. "+
+			"Use --metrics-secure=false to use HTTP instead.")
+	flag.BoolVar(&metrics.enableHTTP2, "enable-http2", false, "If set, HTTP/2 will be enabled for the metrics server.")
+	flag.StringVar(&metrics.certPath, "metrics-cert-path", "",
+		"The directory that contains the metrics server certificate.")
+	flag.StringVar(&metrics.certName, "metrics-cert-name", "tls.crt", "The name of the metrics server certificate file.")
+	flag.StringVar(&metrics.certKey, "metrics-cert-key", "tls.key", "The name of the metrics server key file.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
 	flag.BoolVar(&enableLeaderElection, "leader-elect", false, "Enable leader election.")
 	flag.BoolVar(&observeOnly, "observe-only", true,
@@ -67,7 +106,7 @@ func main() {
 
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
 		Scheme:                 scheme,
-		Metrics:                metricsserver.Options{BindAddress: metricsAddr},
+		Metrics:                metrics.options(),
 		HealthProbeBindAddress: probeAddr,
 		LeaderElection:         enableLeaderElection,
 		LeaderElectionID:       "nodelabel-controller.workergroup.in-cloud.io",
