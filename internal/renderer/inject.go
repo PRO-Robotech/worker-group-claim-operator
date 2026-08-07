@@ -6,13 +6,8 @@ import (
 	"strings"
 )
 
-// InjectNodeLabels auto-injects a "nodeLabels" variable into vars
-// as a sorted "k1=v1,k2=v2" string, unless already explicitly set.
-// Does nothing if nodeLabels map is empty.
+// InjectNodeLabels injects a sorted "k1=v1,k2=v2" string, unless already set; empty map injects "".
 func InjectNodeLabels(vars map[string]any, nodeLabels map[string]string) {
-	if len(nodeLabels) == 0 {
-		return
-	}
 	if _, exists := vars["nodeLabels"]; exists {
 		return
 	}

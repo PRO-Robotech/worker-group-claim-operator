@@ -1413,6 +1413,125 @@ spec:
 				"active BMT should NOT be deleted")
 		})
 	})
+
+	Context("Node labels rendering", func() {
+		It("should reconcile to Ready when a template references .nodeLabels and the claim has none", func() {
+			ns := createNamespace("test-empty-nodelabels")
+
+			machineTmpl := &v1alpha1.WGMachineTemplate{
+				ObjectMeta: metav1.ObjectMeta{Name: "machine-tmpl-" + ns},
+				Spec:       v1alpha1.WGMachineTemplateSpec{Value: bmtTemplateContent()},
+			}
+			Expect(k8sClient.Create(ctx, machineTmpl)).To(Succeed())
+
+			bootstrapTmpl := &v1alpha1.WGBootstrapTemplate{
+				ObjectMeta: metav1.ObjectMeta{Name: "bootstrap-tmpl-" + ns},
+				Spec:       v1alpha1.WGBootstrapTemplateSpec{Value: kctTemplateContentWithNodeLabels()},
+			}
+			Expect(k8sClient.Create(ctx, bootstrapTmpl)).To(Succeed())
+
+			claim := newClaim("pool-nolabels", ns, "nolabels-cluster")
+			Expect(k8sClient.Create(ctx, claim)).To(Succeed())
+
+			Eventually(func() string {
+				fetched := &v1alpha1.WorkerGroupClaim{}
+				if err := k8sClient.Get(ctx, claimKey("pool-nolabels", ns), fetched); err != nil {
+					return ""
+				}
+
+				return fetched.Status.Phase
+			}, timeout, interval).Should(Equal(v1alpha1.PhaseReady))
+
+			fetched := &v1alpha1.WorkerGroupClaim{}
+			Expect(k8sClient.Get(ctx, claimKey("pool-nolabels", ns), fetched)).To(Succeed())
+			renderedCond := findCondition(fetched.Status.Conditions, v1alpha1.ConditionTemplatesRendered)
+			Expect(renderedCond).NotTo(BeNil())
+			Expect(renderedCond.Status).To(Equal(metav1.ConditionTrue))
+		})
+	})
+
+	Context("Node labels sanitation", func() {
+		provision := func(ns, claimName string, nodeLabels map[string]string) *v1alpha1.WorkerGroupClaim {
+			machineTmpl := &v1alpha1.WGMachineTemplate{
+				ObjectMeta: metav1.ObjectMeta{Name: "machine-tmpl-" + ns},
+				Spec:       v1alpha1.WGMachineTemplateSpec{Value: bmtTemplateContent()},
+			}
+			Expect(k8sClient.Create(ctx, machineTmpl)).To(Succeed())
+
+			bootstrapTmpl := &v1alpha1.WGBootstrapTemplate{
+				ObjectMeta: metav1.ObjectMeta{Name: "bootstrap-tmpl-" + ns},
+				Spec:       v1alpha1.WGBootstrapTemplateSpec{Value: kctTemplateContent()},
+			}
+			Expect(k8sClient.Create(ctx, bootstrapTmpl)).To(Succeed())
+
+			claim := newClaim(claimName, ns, ns+"-cluster")
+			claim.Spec.NodeLabels = nodeLabels
+			Expect(k8sClient.Create(ctx, claim)).To(Succeed())
+
+			return claim
+		}
+
+		eventuallyPhase := func(name, ns string) func() string {
+			return func() string {
+				fetched := &v1alpha1.WorkerGroupClaim{}
+				if err := k8sClient.Get(ctx, claimKey(name, ns), fetched); err != nil {
+					return ""
+				}
+
+				return fetched.Status.Phase
+			}
+		}
+
+		It("should drop reserved-prefix labels and keep reconciling", func() {
+			ns := createNamespace("test-labels-reserved")
+			provision(ns, "pool-reserved", map[string]string{
+				"app":                           "nginx",
+				"cluster.x-k8s.io/cluster-name": "hijacked",
+			})
+
+			Eventually(eventuallyPhase("pool-reserved", ns), timeout, interval).Should(Equal(v1alpha1.PhaseReady))
+
+			fetched := &v1alpha1.WorkerGroupClaim{}
+			Expect(k8sClient.Get(ctx, claimKey("pool-reserved", ns), fetched)).To(Succeed())
+			cond := findCondition(fetched.Status.Conditions, v1alpha1.ConditionNodeLabelsAccepted)
+			Expect(cond).NotTo(BeNil())
+			Expect(cond.Status).To(Equal(metav1.ConditionFalse))
+			Expect(cond.Reason).To(Equal("ReservedPrefixesDropped"))
+			Expect(cond.Message).To(ContainSubstring("cluster.x-k8s.io/cluster-name"))
+
+			md := &clusterv1.MachineDeployment{}
+			mdName := fetched.Spec.ClusterName + "-pool-reserved"
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: mdName, Namespace: ns}, md)).To(Succeed())
+			Expect(md.Spec.Template.Labels).To(HaveKeyWithValue("app", "nginx"))
+			Expect(md.Spec.Template.Labels).NotTo(HaveKeyWithValue("cluster.x-k8s.io/cluster-name", "hijacked"))
+		})
+
+		It("should fail the claim when a label value is syntactically invalid", func() {
+			ns := createNamespace("test-labels-invalid")
+			provision(ns, "pool-invalid", map[string]string{"app": "bad value"})
+
+			Eventually(eventuallyPhase("pool-invalid", ns), timeout, interval).Should(Equal(v1alpha1.PhaseFailed))
+
+			fetched := &v1alpha1.WorkerGroupClaim{}
+			Expect(k8sClient.Get(ctx, claimKey("pool-invalid", ns), fetched)).To(Succeed())
+			cond := findCondition(fetched.Status.Conditions, v1alpha1.ConditionTemplatesRendered)
+			Expect(cond).NotTo(BeNil())
+			Expect(cond.Reason).To(Equal("NodeLabelsInvalid"))
+		})
+
+		It("should report all labels accepted when none are reserved", func() {
+			ns := createNamespace("test-labels-clean")
+			provision(ns, "pool-clean", map[string]string{"app": "nginx"})
+
+			Eventually(eventuallyPhase("pool-clean", ns), timeout, interval).Should(Equal(v1alpha1.PhaseReady))
+
+			fetched := &v1alpha1.WorkerGroupClaim{}
+			Expect(k8sClient.Get(ctx, claimKey("pool-clean", ns), fetched)).To(Succeed())
+			cond := findCondition(fetched.Status.Conditions, v1alpha1.ConditionNodeLabelsAccepted)
+			Expect(cond).NotTo(BeNil())
+			Expect(cond.Status).To(Equal(metav1.ConditionTrue))
+		})
+	})
 })
 
 // Helper functions
@@ -1502,6 +1621,20 @@ spec:
     spec:
       joinConfiguration:
         nodeRegistration:
+          name: '{{ "{{ ds.meta_data.local_hostname }}" }}'`
+}
+
+func kctTemplateContentWithNodeLabels() string {
+	return `apiVersion: bootstrap.cluster.x-k8s.io/v1beta2
+kind: KubeadmConfigTemplate
+spec:
+  template:
+    spec:
+      joinConfiguration:
+        nodeRegistration:
+          kubeletExtraArgs:
+            - name: node-labels
+              value: "{{ .nodeLabels }}"
           name: '{{ "{{ ds.meta_data.local_hostname }}" }}'`
 }
 

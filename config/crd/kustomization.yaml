@@ -5,6 +5,7 @@ resources:
 - bases/workergroup.in-cloud.io_workergroupclaims.yaml
 - bases/workergroup.in-cloud.io_wgbootstraptemplates.yaml
 - bases/workergroup.in-cloud.io_wgmachinetemplates.yaml
+- bases/workergroup.in-cloud.io_nodelabelpolicies.yaml
 # +kubebuilder:scaffold:crdkustomizeresource
 
 patches:

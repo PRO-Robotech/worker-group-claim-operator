@@ -55,7 +55,7 @@ jobs:
 
       # --- BUILD AND PUSH ---
 
-      - name: Build and push operator image
+      - name: Build and push workergroups operator image
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -64,8 +64,20 @@ jobs:
           provenance: false
           platforms: linux/amd64
           tags: |
-            ${{ secrets.DOCKERHUB_USERNAME }}/${{ github.event.repository.name }}:amd64-${{ steps.sanitize.outputs.branch }}-${{ steps.short-sha.outputs.sha }}
             ${{ secrets.DOCKERHUB_USERNAME }}/${{ github.event.repository.name }}:${{ steps.sanitize.outputs.branch }}-${{ steps.short-sha.outputs.sha }}
+          cache-from: type=local,src=/tmp/.buildx-cache
+          cache-to: type=local,dest=/tmp/.buildx-cache-new,mode=max
+
+      - name: Build and push nodelabels operator image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile.nodelabel
+          push: true
+          provenance: false
+          platforms: linux/amd64
+          tags: |
+            ${{ secrets.DOCKERHUB_USERNAME }}/nodelabels-operator:${{ steps.sanitize.outputs.branch }}-${{ steps.short-sha.outputs.sha }}
           cache-from: type=local,src=/tmp/.buildx-cache
           cache-to: type=local,dest=/tmp/.buildx-cache-new,mode=max
 

@@ -3,4 +3,5 @@ resources:
 - workergroup_v1alpha1_workergroupclaim.yaml
 - workergroup_v1alpha1_wgbootstraptemplate.yaml
 - workergroup_v1alpha1_wgmachinetemplate.yaml
+- workergroup_v1alpha1_nodelabelpolicy.yaml
 # +kubebuilder:scaffold:manifestskustomizesamples

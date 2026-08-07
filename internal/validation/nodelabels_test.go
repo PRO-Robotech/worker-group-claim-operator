@@ -1,62 +1,145 @@
 package validation
 
 import (
+	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/pointpu/worker-group-claim-operator/internal/nodelabels"
 )
 
-func TestValidateNodeLabels_Valid(t *testing.T) {
-	labels := map[string]string{
-		"app":             "nginx",
-		"environment":     "production",
-		"custom.io/label": "value",
+func TestSanitizeNodeLabels(t *testing.T) {
+	tests := map[string]struct {
+		labels       map[string]string
+		wantAccepted map[string]string
+		wantRejected []string
+	}{
+		"all valid": {
+			labels: map[string]string{
+				"app":             "nginx",
+				"environment":     "production",
+				"custom.io/label": "value",
+			},
+			wantAccepted: map[string]string{
+				"app":             "nginx",
+				"environment":     "production",
+				"custom.io/label": "value",
+			},
+		},
+		"nil": {},
+		"empty": {
+			labels: map[string]string{},
+		},
+		"empty value is valid": {
+			labels:       map[string]string{"app": ""},
+			wantAccepted: map[string]string{"app": ""},
+		},
+		"single reserved dropped": {
+			labels:       map[string]string{"cluster.x-k8s.io/cluster-name": "my-cluster"},
+			wantAccepted: map[string]string{},
+			wantRejected: []string{"cluster.x-k8s.io/cluster-name"},
+		},
+		"reserved dropped, rest kept, sorted": {
+			labels: map[string]string{
+				"workergroup.in-cloud.io/claim-name":       "val",
+				"cluster.x-k8s.io/cluster-name":            "val",
+				"node-group.beget.com/name":                "val",
+				"node.cluster.x-k8s.io/managed":            "val",
+				"node-restriction.kubernetes.io/protected": "val",
+				"valid-label": "val",
+			},
+			wantAccepted: map[string]string{"valid-label": "val"},
+			wantRejected: []string{
+				"cluster.x-k8s.io/cluster-name",
+				"node-group.beget.com/name",
+				"node-restriction.kubernetes.io/protected",
+				"node.cluster.x-k8s.io/managed",
+				"workergroup.in-cloud.io/claim-name",
+			},
+		},
+		"node-role is not reserved": {
+			labels:       map[string]string{"node-role.kubernetes.io/worker": "true"},
+			wantAccepted: map[string]string{"node-role.kubernetes.io/worker": "true"},
+		},
 	}
-	if err := ValidateNodeLabels(labels); err != nil {
-		t.Errorf("expected no error for valid labels, got: %v", err)
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			accepted, rejected, err := SanitizeNodeLabels(tt.labels, nodelabels.NewClaimPolicy(nil))
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if tt.wantAccepted == nil && accepted != nil && len(accepted) != 0 {
+				t.Errorf("accepted = %v, want empty", accepted)
+			}
+			if tt.wantAccepted != nil && !reflect.DeepEqual(accepted, tt.wantAccepted) {
+				t.Errorf("accepted = %v, want %v", accepted, tt.wantAccepted)
+			}
+			if !reflect.DeepEqual(rejected, tt.wantRejected) {
+				t.Errorf("rejected = %v, want %v", rejected, tt.wantRejected)
+			}
+		})
 	}
 }
 
-func TestValidateNodeLabels_Empty(t *testing.T) {
-	if err := ValidateNodeLabels(nil); err != nil {
-		t.Errorf("expected no error for nil labels, got: %v", err)
+func TestSanitizeNodeLabels_InvalidSyntax(t *testing.T) {
+	tests := map[string]struct {
+		labels   map[string]string
+		wantHint string
+	}{
+		"bad key charset":   {labels: map[string]string{"bad key": "val"}, wantHint: "bad key"},
+		"two slashes":       {labels: map[string]string{"a/b/c": "val"}, wantHint: "a/b/c"},
+		"key too long":      {labels: map[string]string{strings.Repeat("a", 64): "val"}, wantHint: "must be no more than 63"},
+		"bad value charset": {labels: map[string]string{"app": "bad value"}, wantHint: "app=bad value"},
+		"value too long":    {labels: map[string]string{"app": strings.Repeat("v", 64)}, wantHint: "must be no more than 63"},
 	}
-	if err := ValidateNodeLabels(map[string]string{}); err != nil {
-		t.Errorf("expected no error for empty labels, got: %v", err)
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			accepted, rejected, err := SanitizeNodeLabels(tt.labels, nodelabels.NewClaimPolicy(nil))
+			if err == nil {
+				t.Fatal("expected error for invalid label")
+			}
+			if !strings.Contains(err.Error(), tt.wantHint) {
+				t.Errorf("error = %v, want it to mention %q", err, tt.wantHint)
+			}
+			if accepted != nil || rejected != nil {
+				t.Errorf("accepted/rejected must be nil on error, got %v / %v", accepted, rejected)
+			}
+		})
 	}
 }
 
-func TestValidateNodeLabels_SingleReserved(t *testing.T) {
-	labels := map[string]string{
-		"cluster.x-k8s.io/cluster-name": "my-cluster",
-	}
-	err := ValidateNodeLabels(labels)
+func TestSanitizeNodeLabels_InvalidWinsOverReserved(t *testing.T) {
+	_, _, err := SanitizeNodeLabels(map[string]string{
+		"cluster.x-k8s.io/name": "val",
+		"bad key":               "val",
+	}, nodelabels.NewClaimPolicy(nil))
 	if err == nil {
-		t.Fatal("expected error for reserved prefix")
-	}
-	if !strings.Contains(err.Error(), "cluster.x-k8s.io/cluster-name") {
-		t.Errorf("error should contain key name: %v", err)
+		t.Fatal("expected error when an invalid key is present")
 	}
 }
 
-func TestValidateNodeLabels_MultipleReserved(t *testing.T) {
-	labels := map[string]string{
-		"cluster.x-k8s.io/cluster-name":      "val",
-		"workergroup.in-cloud.io/claim-name": "val",
-		"node-group.beget.com/name":          "val",
-		"valid-label":                        "val",
+func TestSanitizeNodeLabelsHonoursPolicyFromCRD(t *testing.T) {
+	// A key allowed by the compiled-in floor must be dropped once the CRD denies it.
+	labels := map[string]string{"example.com/team": "payments", "app": "nginx"}
+
+	accepted, rejected, err := SanitizeNodeLabels(labels, nodelabels.NewClaimPolicy(nil))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
-	err := ValidateNodeLabels(labels)
-	if err == nil {
-		t.Fatal("expected error for reserved prefixes")
+	if len(rejected) != 0 || len(accepted) != 2 {
+		t.Fatalf("without policy: accepted=%v rejected=%v", accepted, rejected)
 	}
-	// Should mention all three reserved keys
-	if !strings.Contains(err.Error(), "cluster.x-k8s.io/cluster-name") {
-		t.Errorf("error should contain cluster.x-k8s.io key: %v", err)
+
+	accepted, rejected, err = SanitizeNodeLabels(labels, nodelabels.NewClaimPolicy([]string{`^example\.com/`}))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
-	if !strings.Contains(err.Error(), "workergroup.in-cloud.io/claim-name") {
-		t.Errorf("error should contain workergroup key: %v", err)
+	if !reflect.DeepEqual(rejected, []string{"example.com/team"}) {
+		t.Errorf("rejected = %v, want [example.com/team]", rejected)
 	}
-	if !strings.Contains(err.Error(), "node-group.beget.com/name") {
-		t.Errorf("error should contain node-group key: %v", err)
+	if !reflect.DeepEqual(accepted, map[string]string{"app": "nginx"}) {
+		t.Errorf("accepted = %v", accepted)
 	}
 }

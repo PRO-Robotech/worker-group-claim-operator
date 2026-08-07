@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
@@ -45,6 +46,7 @@ import (
 	"github.com/pointpu/worker-group-claim-operator/internal/builder"
 	"github.com/pointpu/worker-group-claim-operator/internal/hash"
 	"github.com/pointpu/worker-group-claim-operator/internal/kubelet"
+	"github.com/pointpu/worker-group-claim-operator/internal/nodelabels"
 	"github.com/pointpu/worker-group-claim-operator/internal/renderer"
 	"github.com/pointpu/worker-group-claim-operator/internal/validation"
 )
@@ -67,7 +69,7 @@ type WorkerGroupClaimReconciler struct {
 // +kubebuilder:rbac:groups=workergroup.in-cloud.io,resources=workergroupclaims,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=workergroup.in-cloud.io,resources=workergroupclaims/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=workergroup.in-cloud.io,resources=workergroupclaims/finalizers,verbs=update
-// +kubebuilder:rbac:groups=workergroup.in-cloud.io,resources=wgbootstraptemplates;wgmachinetemplates,verbs=get;list;watch
+// +kubebuilder:rbac:groups=workergroup.in-cloud.io,resources=wgbootstraptemplates;wgmachinetemplates;nodelabelpolicies,verbs=get;list;watch
 // +kubebuilder:rbac:groups=infrastructure.cluster.x-k8s.io,resources=begetmachinetemplates,verbs=get;list;watch;create;delete
 // +kubebuilder:rbac:groups=bootstrap.cluster.x-k8s.io,resources=kubeadmconfigtemplates,verbs=get;list;watch;create;update;delete
 // +kubebuilder:rbac:groups=cluster.x-k8s.io,resources=machinedeployments,verbs=get;list;watch;create;update;patch;delete
@@ -80,17 +82,14 @@ func (r *WorkerGroupClaimReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	// 1. Handle deletion
 	if !claim.DeletionTimestamp.IsZero() {
 		return r.reconcileDelete(ctx, claim)
 	}
 
-	// 2. Check pause
 	if isPaused(claim) {
 		return r.reconcilePaused(ctx, claim)
 	}
 
-	// 3. Handle resume from Paused
 	if claim.Status.Phase == v1alpha1.PhasePaused {
 		meta.SetStatusCondition(&claim.Status.Conditions, metav1.Condition{
 			Type:               v1alpha1.ConditionPaused,
@@ -102,29 +101,26 @@ func (r *WorkerGroupClaimReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		r.Recorder.Event(claim, "Normal", "Resumed", "Reconciliation resumed")
 	}
 
-	// 4. Ensure finalizer
 	if err := r.ensureFinalizer(ctx, claim); err != nil {
 		return ctrl.Result{}, err
 	}
 
-	// 4. Validate nodeLabels
-	if err := validation.ValidateNodeLabels(claim.Spec.NodeLabels); err != nil {
+	nodeLabels, rejectedLabels, err := validation.SanitizeNodeLabels(claim.Spec.NodeLabels, r.labelPolicy(ctx))
+	if err != nil {
 		return r.setFailed(ctx, claim, "NodeLabelsInvalid", err.Error())
 	}
+	r.setNodeLabelsAcceptedCondition(claim, rejectedLabels)
 
-	// 5. Render templates
-	bmtYAML, kctYAML, err := r.renderTemplates(ctx, claim)
+	bmtYAML, kctYAML, err := r.renderTemplates(ctx, claim, nodeLabels)
 	if err != nil {
 		return r.setFailed(ctx, claim, "RenderError", err.Error())
 	}
 
-	// 6. Compute hashes and resource names
 	bmtHash := hash.ComputeHash(bmtYAML)
 	bmtName := hash.ResourceName(claim.Spec.ClusterName, claim.Name, hash.TypeBMT, bmtHash)
 	kctHash := hash.ComputeHash(kctYAML)
 	kctName := hash.ResourceName(claim.Spec.ClusterName, claim.Name, hash.TypeKCT, kctHash)
 
-	// 7. Detect changes
 	isFirstProvision := claim.Status.CurrentTemplates == nil
 	var oldBMT, oldKCT string
 	if !isFirstProvision {
@@ -133,7 +129,6 @@ func (r *WorkerGroupClaimReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	}
 	hashChanged := !isFirstProvision && (oldBMT != bmtName || oldKCT != kctName)
 
-	// 8. Ensure immutable templates exist (create-before-update)
 	bmtCreated, err := r.ensureBMT(ctx, claim, bmtYAML, bmtName)
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("ensure BMT: %w", err)
@@ -156,7 +151,6 @@ func (r *WorkerGroupClaimReconciler) Reconcile(ctx context.Context, req ctrl.Req
 			"Updated KubeadmConfigTemplate %s in-place", kctName)
 	}
 
-	// 9. If hash changed, move old templates to pendingDeletion
 	if hashChanged {
 		if oldBMT != bmtName {
 			claim.Status.PendingDeletion = appendResourceRef(
@@ -178,8 +172,7 @@ func (r *WorkerGroupClaimReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		claim.Status.PendingDeletion = filtered
 	}
 
-	// 10. Ensure MachineDeployment
-	mdUpdated, err := r.ensureMachineDeployment(ctx, claim, bmtName, kctName)
+	mdUpdated, err := r.ensureMachineDeployment(ctx, claim, nodeLabels, bmtName, kctName)
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("ensure MD: %w", err)
 	}
@@ -189,7 +182,6 @@ func (r *WorkerGroupClaimReconciler) Reconcile(ctx context.Context, req ctrl.Req
 			builder.MachineDeploymentName(claim.Spec.ClusterName, claim.Name))
 	}
 
-	// 11. Update current templates, hashes, and TemplatesRendered condition
 	claim.Status.CurrentTemplates = &v1alpha1.CurrentTemplates{BMT: bmtName, KCT: kctName}
 	claim.Status.LastRendered = &v1alpha1.LastRendered{BMTHash: bmtHash, KCTHash: kctHash}
 	meta.SetStatusCondition(&claim.Status.Conditions, metav1.Condition{
@@ -200,13 +192,10 @@ func (r *WorkerGroupClaimReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		ObservedGeneration: claim.Generation,
 	})
 
-	// 12. Mirror MD status
 	r.mirrorMDStatus(ctx, claim)
 
-	// 13. Set observedGeneration
 	claim.Status.ObservedGeneration = claim.Generation
 
-	// 14. Phase transitions
 	if hashChanged {
 		return r.startRollout(ctx, claim)
 	}
@@ -647,7 +636,7 @@ func isPaused(claim *v1alpha1.WorkerGroupClaim) bool {
 
 // renderTemplates loads templates, prepares vars, injects auto-vars, and renders.
 func (r *WorkerGroupClaimReconciler) renderTemplates(
-	ctx context.Context, claim *v1alpha1.WorkerGroupClaim,
+	ctx context.Context, claim *v1alpha1.WorkerGroupClaim, nodeLabels map[string]string,
 ) (bmtYAML, kctYAML string, err error) {
 	// Load WGMachineTemplate
 	machineTemplate := &v1alpha1.WGMachineTemplate{}
@@ -690,7 +679,7 @@ func (r *WorkerGroupClaimReconciler) renderTemplates(
 	}
 
 	// Auto-inject nodeLabels and machineDeploymentName
-	renderer.InjectNodeLabels(bootstrapVars, claim.Spec.NodeLabels)
+	renderer.InjectNodeLabels(bootstrapVars, nodeLabels)
 	renderer.InjectMachineDeploymentName(bootstrapVars, claim.Spec.ClusterName, claim.Name)
 
 	// Inject kubeletConfigYaml
@@ -815,11 +804,12 @@ func (r *WorkerGroupClaimReconciler) ensureKCT(
 // ensureMachineDeployment creates or updates the MachineDeployment. Returns true if updated.
 func (r *WorkerGroupClaimReconciler) ensureMachineDeployment(
 	ctx context.Context, claim *v1alpha1.WorkerGroupClaim,
+	nodeLabels map[string]string,
 	bmtName, kctName string,
 ) (bool, error) {
 	mdName := builder.MachineDeploymentName(claim.Spec.ClusterName, claim.Name)
 
-	desired := builder.BuildMachineDeployment(claim, bmtName, kctName)
+	desired := builder.BuildMachineDeployment(claim, nodeLabels, bmtName, kctName)
 
 	existing := &clusterv1.MachineDeployment{}
 	err := r.Get(ctx, types.NamespacedName{Name: mdName, Namespace: claim.Namespace}, existing)
@@ -854,6 +844,43 @@ func (r *WorkerGroupClaimReconciler) ensureMachineDeployment(
 	}
 
 	return true, nil
+}
+
+// labelPolicy resolves the deny policy from the CRD, falling back to the compiled-in floor.
+func (r *WorkerGroupClaimReconciler) labelPolicy(ctx context.Context) *nodelabels.Policy {
+	obj := &v1alpha1.NodeLabelPolicy{}
+	err := r.Get(ctx, types.NamespacedName{Name: v1alpha1.NodeLabelPolicyName}, obj)
+	if err != nil {
+		if !apierrors.IsNotFound(err) {
+			logf.FromContext(ctx).Error(err, "Failed to read NodeLabelPolicy, using compiled-in rules")
+		}
+
+		return nodelabels.NewClaimPolicy(nil)
+	}
+
+	return nodelabels.NewClaimPolicy(obj.Spec.DenyPatterns)
+}
+
+// setNodeLabelsAcceptedCondition reports which nodeLabels were dropped by policy.
+func (r *WorkerGroupClaimReconciler) setNodeLabelsAcceptedCondition(
+	claim *v1alpha1.WorkerGroupClaim, rejected []string,
+) {
+	cond := metav1.Condition{
+		Type:               v1alpha1.ConditionNodeLabelsAccepted,
+		Status:             metav1.ConditionTrue,
+		Reason:             "AllLabelsAccepted",
+		Message:            "All nodeLabels accepted",
+		ObservedGeneration: claim.Generation,
+	}
+
+	if len(rejected) != 0 {
+		cond.Status = metav1.ConditionFalse
+		cond.Reason = "ReservedPrefixesDropped"
+		cond.Message = fmt.Sprintf("Dropped nodeLabels with reserved prefixes: %s", strings.Join(rejected, ", "))
+		r.Recorder.Event(claim, "Warning", cond.Reason, cond.Message)
+	}
+
+	meta.SetStatusCondition(&claim.Status.Conditions, cond)
 }
 
 // setFailed sets the claim to Failed phase with condition and returns a delayed requeue.
@@ -914,6 +941,8 @@ func (r *WorkerGroupClaimReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			handler.EnqueueRequestsFromMapFunc(r.findClaimsForBootstrapTemplate)).
 		Watches(&v1alpha1.WGMachineTemplate{},
 			handler.EnqueueRequestsFromMapFunc(r.findClaimsForMachineTemplate)).
+		Watches(&v1alpha1.NodeLabelPolicy{},
+			handler.EnqueueRequestsFromMapFunc(r.findAllClaims)).
 		WithOptions(controller.Options{
 			MaxConcurrentReconciles: 5,
 		}).
@@ -935,6 +964,30 @@ func (r *WorkerGroupClaimReconciler) findClaimsForMachineTemplate(
 	ctx context.Context, obj client.Object,
 ) []reconcile.Request {
 	return r.findClaimsReferencingTemplate(ctx, obj.GetName(), "machineTemplateRef")
+}
+
+// findAllClaims re-queues every claim on a policy change.
+func (r *WorkerGroupClaimReconciler) findAllClaims(
+	ctx context.Context, _ client.Object,
+) []reconcile.Request {
+	claims := &v1alpha1.WorkerGroupClaimList{}
+	if err := r.List(ctx, claims); err != nil {
+		logf.FromContext(ctx).Error(err, "Failed to list claims for policy change")
+
+		return nil
+	}
+
+	requests := make([]reconcile.Request, 0, len(claims.Items))
+	for i := range claims.Items {
+		requests = append(requests, reconcile.Request{
+			NamespacedName: types.NamespacedName{
+				Name:      claims.Items[i].Name,
+				Namespace: claims.Items[i].Namespace,
+			},
+		})
+	}
+
+	return requests
 }
 
 // findClaimsReferencingTemplate lists all Claims and filters by template ref name.

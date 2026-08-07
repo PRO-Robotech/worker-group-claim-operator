@@ -1,0 +1,8 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+- deployment.yaml
+images:
+- name: nodelabel-controller
+  newName: example.com/nodelabel-controller
+  newTag: v0.0.1
