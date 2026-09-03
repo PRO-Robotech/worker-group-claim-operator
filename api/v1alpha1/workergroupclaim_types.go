@@ -43,6 +43,8 @@ const (
 	ConditionPaused            = "Paused"
 
 	ConditionNodeLabelsAccepted = "NodeLabelsAccepted"
+
+	ConditionAutohealingConfigured = "AutohealingConfigured"
 )
 
 // Finalizer for cleanup on deletion.
@@ -67,6 +69,7 @@ const (
 	KindBMT     = "BegetMachineTemplate"
 	KindBMTList = "BegetMachineTemplateList"
 	KindKCT     = "KubeadmConfigTemplate"
+	KindMHC     = "MachineHealthCheck"
 
 	BMTGroup   = "infrastructure.cluster.x-k8s.io"
 	BMTVersion = "v1beta2"
@@ -149,6 +152,16 @@ type WorkerGroupClaimSpec struct {
 	// +kubebuilder:default="30m"
 	// +optional
 	RolloutTimeout *metav1.Duration `json:"rolloutTimeout,omitempty"`
+
+	// HealthCheck enables automatic replacement of unhealthy nodes.
+	// +optional
+	HealthCheck *WorkerGroupHealthCheck `json:"healthCheck,omitempty"`
+}
+
+// WorkerGroupHealthCheck configures automatic node remediation for the group.
+type WorkerGroupHealthCheck struct {
+	// Enabled turns automatic node replacement on for this worker group.
+	Enabled bool `json:"enabled"`
 }
 
 // TemplateRef is a reference to a cluster-scoped template resource.
@@ -274,6 +287,20 @@ type ResourceOverrides struct {
 	Memory *string `json:"memory,omitempty"`
 }
 
+// HealthCheckStatus is the observed state of the MachineHealthCheck owned by the claim.
+type HealthCheckStatus struct {
+	// Enabled reports whether the MachineHealthCheck exists.
+	Enabled bool `json:"enabled"`
+
+	// Name of the MachineHealthCheck object.
+	// +optional
+	Name string `json:"name,omitempty"`
+
+	// RemediationAllowed mirrors the RemediationAllowed condition of the MachineHealthCheck.
+	// +optional
+	RemediationAllowed *bool `json:"remediationAllowed,omitempty"`
+}
+
 // WorkerGroupClaimStatus defines the observed state of WorkerGroupClaim.
 type WorkerGroupClaimStatus struct {
 	// ObservedGeneration is the most recent generation observed by the controller.
@@ -308,8 +335,13 @@ type WorkerGroupClaimStatus struct {
 	// +optional
 	MachineDeployment *MachineDeploymentStatus `json:"machineDeployment,omitempty"`
 
+	// HealthCheck mirrors the observed state of the managed MachineHealthCheck.
+	// +optional
+	HealthCheck *HealthCheckStatus `json:"healthCheck,omitempty"`
+
 	// Conditions represent the current state of the WorkerGroupClaim.
-	// Known types: Ready, TemplatesRendered, RolloutComplete, RolloutTimedOut, Paused.
+	// Known types: Ready, TemplatesRendered, RolloutComplete, RolloutTimedOut,
+	// Paused, NodeLabelsAccepted, AutohealingConfigured.
 	// +listType=map
 	// +listMapKey=type
 	// +optional

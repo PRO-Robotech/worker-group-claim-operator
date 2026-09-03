@@ -35,11 +35,13 @@ import (
 	bootstrapv1 "sigs.k8s.io/cluster-api/api/bootstrap/kubeadm/v1beta2"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	ctrl "sigs.k8s.io/controller-runtime"
+	builderpkg "sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	v1alpha1 "github.com/pointpu/worker-group-claim-operator/api/v1alpha1"
@@ -74,6 +76,8 @@ type WorkerGroupClaimReconciler struct {
 // +kubebuilder:rbac:groups=bootstrap.cluster.x-k8s.io,resources=kubeadmconfigtemplates,verbs=get;list;watch;create;update;delete
 // +kubebuilder:rbac:groups=cluster.x-k8s.io,resources=machinedeployments,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=cluster.x-k8s.io,resources=machinesets,verbs=get;list;watch
+// +kubebuilder:rbac:groups=cluster.x-k8s.io,resources=machinehealthchecks,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=cluster.x-k8s.io,resources=machinehealthchecks/status,verbs=get
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 
 func (r *WorkerGroupClaimReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -182,6 +186,10 @@ func (r *WorkerGroupClaimReconciler) Reconcile(ctx context.Context, req ctrl.Req
 			builder.MachineDeploymentName(claim.Spec.ClusterName, claim.Name))
 	}
 
+	if err := r.ensureMachineHealthCheck(ctx, claim); err != nil {
+		return ctrl.Result{}, fmt.Errorf("ensure MHC: %w", err)
+	}
+
 	claim.Status.CurrentTemplates = &v1alpha1.CurrentTemplates{BMT: bmtName, KCT: kctName}
 	claim.Status.LastRendered = &v1alpha1.LastRendered{BMTHash: bmtHash, KCTHash: kctHash}
 	meta.SetStatusCondition(&claim.Status.Conditions, metav1.Condition{
@@ -264,6 +272,18 @@ func (r *WorkerGroupClaimReconciler) reconcileDelete(
 		if err := r.Status().Update(ctx, claim); err != nil {
 			return ctrl.Result{}, fmt.Errorf("set deleting phase: %w", err)
 		}
+	}
+
+	mhcName := builder.MachineHealthCheckName(claim.Spec.ClusterName, claim.Name)
+	mhc := &clusterv1.MachineHealthCheck{}
+	switch err := r.Get(ctx, types.NamespacedName{Name: mhcName, Namespace: claim.Namespace}, mhc); {
+	case err == nil:
+		if delErr := r.Delete(ctx, mhc); delErr != nil && !apierrors.IsNotFound(delErr) {
+			return ctrl.Result{}, fmt.Errorf("delete MHC %q: %w", mhcName, delErr)
+		}
+		log.Info("Deleted MachineHealthCheck", "mhc", mhcName)
+	case !apierrors.IsNotFound(err):
+		return ctrl.Result{}, fmt.Errorf("get MHC %q: %w", mhcName, err)
 	}
 
 	// Step 1: Delete MachineDeployment first (it references BMT/KCT)
@@ -838,12 +858,99 @@ func (r *WorkerGroupClaimReconciler) ensureMachineDeployment(
 	existing.Spec.Rollout = desired.Spec.Rollout
 	existing.Spec.Deletion = desired.Spec.Deletion
 	existing.Spec.Template.Spec.Deletion = desired.Spec.Template.Spec.Deletion
+	existing.Spec.Remediation = desired.Spec.Remediation
 
 	if err := r.Update(ctx, existing); err != nil {
 		return false, fmt.Errorf("update MD %q: %w", mdName, err)
 	}
 
 	return true, nil
+}
+
+func (r *WorkerGroupClaimReconciler) ensureMachineHealthCheck(
+	ctx context.Context, claim *v1alpha1.WorkerGroupClaim,
+) error {
+	log := logf.FromContext(ctx)
+	name := builder.MachineHealthCheckName(claim.Spec.ClusterName, claim.Name)
+	key := types.NamespacedName{Name: name, Namespace: claim.Namespace}
+
+	desired := builder.BuildMachineHealthCheck(claim)
+	existing := &clusterv1.MachineHealthCheck{}
+	err := r.Get(ctx, key, existing)
+
+	switch {
+	case desired == nil && apierrors.IsNotFound(err):
+		claim.Status.HealthCheck = nil
+		r.setAutohealingCondition(claim, false, "Disabled", "Autohealing is disabled for this worker group")
+		return nil
+
+	case desired == nil:
+		if err != nil {
+			return fmt.Errorf("get MHC %q: %w", name, err)
+		}
+		if delErr := r.Delete(ctx, existing); delErr != nil && !apierrors.IsNotFound(delErr) {
+			return fmt.Errorf("delete MHC %q: %w", name, delErr)
+		}
+		log.Info("Deleted MachineHealthCheck", "mhc", name)
+		r.Recorder.Eventf(claim, "Normal", "AutohealingDisabled", "Deleted MachineHealthCheck %s", name)
+		claim.Status.HealthCheck = nil
+		r.setAutohealingCondition(claim, false, "Disabled", "Autohealing is disabled for this worker group")
+		return nil
+
+	case apierrors.IsNotFound(err):
+		if createErr := r.Create(ctx, desired); createErr != nil {
+			r.setAutohealingCondition(claim, false, "CreateFailed", createErr.Error())
+			return fmt.Errorf("create MHC %q: %w", name, createErr)
+		}
+		log.Info("Created MachineHealthCheck", "mhc", name)
+		r.Recorder.Eventf(claim, "Normal", "AutohealingEnabled", "Created MachineHealthCheck %s", name)
+		r.mirrorMHCStatus(claim, desired)
+		return nil
+
+	case err != nil:
+		return fmt.Errorf("get MHC %q: %w", name, err)
+	}
+
+	if !apiequality.Semantic.DeepEqual(existing.Spec, desired.Spec) {
+		existing.Spec = desired.Spec
+		if updErr := r.Update(ctx, existing); updErr != nil {
+			r.setAutohealingCondition(claim, false, "UpdateFailed", updErr.Error())
+			return fmt.Errorf("update MHC %q: %w", name, updErr)
+		}
+		log.Info("Updated MachineHealthCheck", "mhc", name)
+		r.Recorder.Eventf(claim, "Normal", "AutohealingUpdated", "Updated MachineHealthCheck %s", name)
+	}
+	r.mirrorMHCStatus(claim, existing)
+	return nil
+}
+
+func (r *WorkerGroupClaimReconciler) mirrorMHCStatus(
+	claim *v1alpha1.WorkerGroupClaim, mhc *clusterv1.MachineHealthCheck,
+) {
+	status := &v1alpha1.HealthCheckStatus{Enabled: true, Name: mhc.Name}
+	if c := meta.FindStatusCondition(mhc.Status.Conditions, clusterv1.MachineHealthCheckRemediationAllowedCondition); c != nil {
+		allowed := c.Status == metav1.ConditionTrue
+		status.RemediationAllowed = &allowed
+	}
+	claim.Status.HealthCheck = status
+	r.setAutohealingCondition(claim, true, "MachineHealthCheckReady",
+		fmt.Sprintf("MachineHealthCheck %s is in place", mhc.Name))
+}
+
+func (r *WorkerGroupClaimReconciler) setAutohealingCondition(
+	claim *v1alpha1.WorkerGroupClaim, ok bool, reason, message string,
+) {
+	status := metav1.ConditionFalse
+	if ok {
+		status = metav1.ConditionTrue
+	}
+	meta.SetStatusCondition(&claim.Status.Conditions, metav1.Condition{
+		Type:               v1alpha1.ConditionAutohealingConfigured,
+		Status:             status,
+		Reason:             reason,
+		Message:            message,
+		ObservedGeneration: claim.Generation,
+	})
 }
 
 // labelPolicy resolves the deny policy from the CRD, falling back to the compiled-in floor.
@@ -936,6 +1043,7 @@ func (r *WorkerGroupClaimReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		For(&v1alpha1.WorkerGroupClaim{}).
 		// Owned resources — automatic enqueue of owner
 		Owns(&clusterv1.MachineDeployment{}).
+		Owns(&clusterv1.MachineHealthCheck{}, builderpkg.WithPredicates(predicate.GenerationChangedPredicate{})).
 		// Shared templates — enqueue all referencing Claims
 		Watches(&v1alpha1.WGBootstrapTemplate{},
 			handler.EnqueueRequestsFromMapFunc(r.findClaimsForBootstrapTemplate)).

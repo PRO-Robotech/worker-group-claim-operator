@@ -115,6 +115,17 @@ spec:
                     minimum: 0
                     type: integer
                 type: object
+              healthCheck:
+                description: HealthCheck enables automatic replacement of unhealthy
+                  nodes.
+                properties:
+                  enabled:
+                    description: Enabled turns automatic node replacement on for this
+                      worker group.
+                    type: boolean
+                required:
+                - enabled
+                type: object
               infrastructure:
                 additionalProperties:
                   x-kubernetes-preserve-unknown-fields: true
@@ -317,7 +328,8 @@ spec:
               conditions:
                 description: |-
                   Conditions represent the current state of the WorkerGroupClaim.
-                  Known types: Ready, TemplatesRendered, RolloutComplete, RolloutTimedOut, Paused.
+                  Known types: Ready, TemplatesRendered, RolloutComplete, RolloutTimedOut,
+                  Paused, NodeLabelsAccepted, AutohealingConfigured.
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
@@ -389,6 +401,23 @@ spec:
                 required:
                 - bmt
                 - kct
+                type: object
+              healthCheck:
+                description: HealthCheck mirrors the observed state of the managed
+                  MachineHealthCheck.
+                properties:
+                  enabled:
+                    description: Enabled reports whether the MachineHealthCheck exists.
+                    type: boolean
+                  name:
+                    description: Name of the MachineHealthCheck object.
+                    type: string
+                  remediationAllowed:
+                    description: RemediationAllowed mirrors the RemediationAllowed
+                      condition of the MachineHealthCheck.
+                    type: boolean
+                required:
+                - enabled
                 type: object
               lastRendered:
                 description: LastRendered holds the hashes and any errors from the
