@@ -17,11 +17,7 @@ func BuildMachineDeployment(
 ) *clusterv1.MachineDeployment {
 	mdName := MachineDeploymentName(claim.Spec.ClusterName, claim.Name)
 
-	// System labels for selector and template
-	selectorLabels := map[string]string{
-		v1alpha1.LabelClusterName: claim.Spec.ClusterName,
-		v1alpha1.LabelClaimName:   claim.Name,
-	}
+	selectorLabels := SelectorLabels(claim)
 
 	// System labels go on top: a user label must not shadow a selector or CAPI key.
 	templateLabels := make(map[string]string, len(selectorLabels)+len(nodeLabels))
@@ -35,11 +31,7 @@ func BuildMachineDeployment(
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      mdName,
 			Namespace: claim.Namespace,
-			Labels: map[string]string{
-				v1alpha1.LabelClusterName: claim.Spec.ClusterName,
-				v1alpha1.LabelClaimName:   claim.Name,
-				v1alpha1.LabelClaimNS:     claim.Namespace,
-			},
+			Labels:    ObjectLabels(claim),
 			OwnerReferences: []metav1.OwnerReference{
 				ownerRef(claim),
 			},
@@ -78,6 +70,9 @@ func BuildMachineDeployment(
 	// Machine deletion timeouts — defaults + optional overrides from spec.deletion
 	md.Spec.Template.Spec.Deletion = buildMachineDeletion(claim.Spec.Deletion)
 
+	maxInFlight := mdRemediationMaxInFlight
+	md.Spec.Remediation.MaxInFlight = &maxInFlight
+
 	// Strategy mapping
 	if claim.Spec.Strategy != nil {
 		md.Spec.Rollout.Strategy = convertStrategy(claim.Spec.Strategy)
@@ -91,6 +86,23 @@ func BuildMachineDeployment(
 	}
 
 	return md
+}
+
+// SelectorLabels are the labels every Machine of the group carries.
+func SelectorLabels(claim *v1alpha1.WorkerGroupClaim) map[string]string {
+	return map[string]string{
+		v1alpha1.LabelClusterName: claim.Spec.ClusterName,
+		v1alpha1.LabelClaimName:   claim.Name,
+	}
+}
+
+// ObjectLabels are put on every object the operator owns.
+func ObjectLabels(claim *v1alpha1.WorkerGroupClaim) map[string]string {
+	return map[string]string{
+		v1alpha1.LabelClusterName: claim.Spec.ClusterName,
+		v1alpha1.LabelClaimName:   claim.Name,
+		v1alpha1.LabelClaimNS:     claim.Namespace,
+	}
 }
 
 // MachineDeploymentName returns the standard MD name: {clusterName}-{claimName}.

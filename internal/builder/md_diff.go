@@ -54,6 +54,9 @@ func ComputeMDDiff(desired, existing *clusterv1.MachineDeployment) MDDiff {
 	if !reflect.DeepEqual(desired.Spec.Deletion, existing.Spec.Deletion) {
 		diff.InPlaceChanged = true
 	}
+	if !reflect.DeepEqual(desired.Spec.Remediation, existing.Spec.Remediation) {
+		diff.InPlaceChanged = true
+	}
 
 	return diff
 }

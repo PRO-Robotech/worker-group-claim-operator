@@ -1,6 +1,7 @@
 package builder
 
 import (
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"testing"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -148,5 +149,17 @@ func TestComputeMDDiff_BothChanges(t *testing.T) {
 	}
 	if !diff.NeedsUpdate() {
 		t.Error("NeedsUpdate should be true")
+	}
+}
+
+func TestComputeMDDiff_RemediationChange(t *testing.T) {
+	desired := baseMD()
+	maxInFlight := intstr.FromInt32(1)
+	desired.Spec.Remediation.MaxInFlight = &maxInFlight
+
+	existing := baseMD()
+
+	if !ComputeMDDiff(desired, existing).NeedsUpdate() {
+		t.Fatal("maxInFlight missing on an existing MachineDeployment must be seen as a diff")
 	}
 }

@@ -34,6 +34,7 @@ rules:
   - cluster.x-k8s.io
   resources:
   - machinedeployments
+  - machinehealthchecks
   verbs:
   - create
   - delete
@@ -42,6 +43,12 @@ rules:
   - patch
   - update
   - watch
+- apiGroups:
+  - cluster.x-k8s.io
+  resources:
+  - machinehealthchecks/status
+  verbs:
+  - get
 - apiGroups:
   - cluster.x-k8s.io
   resources:
