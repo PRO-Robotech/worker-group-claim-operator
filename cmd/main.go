@@ -39,6 +39,7 @@ import (
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 
 	workergroupv1alpha1 "github.com/pointpu/worker-group-claim-operator/api/v1alpha1"
+	"github.com/pointpu/worker-group-claim-operator/internal/builder"
 	"github.com/pointpu/worker-group-claim-operator/internal/controller"
 	// +kubebuilder:scaffold:imports
 )
@@ -87,10 +88,15 @@ func main() {
 	opts := zap.Options{
 		Development: true,
 	}
+	autohealingTimeout := flag.Int("autohealing-unhealthy-timeout-seconds",
+		int(builder.DefaultUnhealthyTimeoutSeconds),
+		"How long a node stays NotReady before autohealing replaces it.")
 	opts.BindFlags(flag.CommandLine)
 	flag.Parse()
 
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
+
+	applyAutohealingTimeout(*autohealingTimeout)
 
 	// if the enable-http2 flag is false (the default), http/2 should be disabled
 	// due to its vulnerabilities. More specifically, disabling http/2 will
@@ -214,4 +220,20 @@ func main() {
 		setupLog.Error(err, "problem running manager")
 		os.Exit(1)
 	}
+}
+
+// applyAutohealingTimeout overrides the remediation timeout, keeping the default on an invalid value.
+func applyAutohealingTimeout(seconds int) {
+	if seconds <= 0 || seconds > 1<<31-1 {
+		setupLog.Error(nil, "invalid autohealing timeout, keeping default",
+			"seconds", seconds, "default", builder.DefaultUnhealthyTimeoutSeconds)
+		return
+	}
+
+	if int32(seconds) == builder.DefaultUnhealthyTimeoutSeconds {
+		return
+	}
+
+	builder.SetUnhealthyTimeoutSeconds(int32(seconds))
+	setupLog.Info("autohealing remediation timeout overridden", "seconds", seconds)
 }

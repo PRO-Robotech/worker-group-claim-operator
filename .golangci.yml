@@ -45,7 +45,6 @@ linters:
     # Performance & Style
     - perfsprint      # fmt.Errorf → errors.New for static strings
     - predeclared     # shadowing builtins (copy, len, etc.)
-    - modernize       # interface{} → any, maps.Copy, etc.
     - nestif          # deeply nested ifs
     - nakedret        # naked returns in long functions
     - copyloopvar     # loop variable copies
@@ -148,11 +147,6 @@ linters:
         linters:
           - gosec
           - noctx
-
-      # K8s API types follow K8s conventions
-      - path: 'api/'
-        linters:
-          - modernize
 
       # Allow unchecked Close() in deferred calls
       - text: 'Error return value of .*(Close|Flush|Remove).*is not checked'
