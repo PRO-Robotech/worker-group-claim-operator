@@ -9,13 +9,25 @@ import (
 	v1alpha1 "github.com/pointpu/worker-group-claim-operator/api/v1alpha1"
 )
 
+// DefaultUnhealthyTimeoutSeconds is how long a node stays NotReady before it is replaced.
+const DefaultUnhealthyTimeoutSeconds = int32(900)
+
 var (
-	mhcNodeStartupTimeoutSeconds         = int32(360)
-	mhcUnhealthyTimeoutSeconds           = int32(600)
-	mhcUnhealthySingleNodeTimeoutSeconds = int32(900)
-	mhcUnhealthyLessThanOrEqualTo        = intstr.FromInt32(1)
-	mdRemediationMaxInFlight             = intstr.FromInt32(1)
+	mhcNodeStartupTimeoutSeconds  = int32(360)
+	mhcUnhealthyTimeoutSeconds    = DefaultUnhealthyTimeoutSeconds
+	mhcUnhealthyLessThanOrEqualTo = intstr.FromInt32(1)
+	mdRemediationMaxInFlight      = intstr.FromInt32(1)
 )
+
+// SetUnhealthyTimeoutSeconds overrides the remediation timeout. Call before the manager starts.
+func SetUnhealthyTimeoutSeconds(seconds int32) {
+	mhcUnhealthyTimeoutSeconds = seconds
+}
+
+// UnhealthyTimeoutSeconds returns the timeout written into every MachineHealthCheck.
+func UnhealthyTimeoutSeconds() int32 {
+	return mhcUnhealthyTimeoutSeconds
+}
 
 // MachineHealthCheckName returns the MHC name: {clusterName}-{claimName}-mhc.
 func MachineHealthCheckName(clusterName, claimName string) string {
@@ -29,9 +41,6 @@ func BuildMachineHealthCheck(claim *v1alpha1.WorkerGroupClaim) *clusterv1.Machin
 	}
 
 	timeoutFalse := mhcUnhealthyTimeoutSeconds
-	if claim.Spec.Replicas != nil && *claim.Spec.Replicas == 1 {
-		timeoutFalse = mhcUnhealthySingleNodeTimeoutSeconds
-	}
 	timeoutUnknown := timeoutFalse
 
 	startupTimeout := mhcNodeStartupTimeoutSeconds

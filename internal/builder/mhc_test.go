@@ -95,29 +95,38 @@ func TestBuildMachineHealthCheck_ThresholdsAreExplicit(t *testing.T) {
 		seen[c.Status] = *c.TimeoutSeconds
 	}
 	for _, s := range []corev1.ConditionStatus{corev1.ConditionFalse, corev1.ConditionUnknown} {
-		if seen[s] != 600 {
-			t.Errorf("timeout for Ready=%s is %d, want 600", s, seen[s])
+		if seen[s] != DefaultUnhealthyTimeoutSeconds {
+			t.Errorf("timeout for Ready=%s is %d, want %d", s, seen[s], DefaultUnhealthyTimeoutSeconds)
 		}
 	}
 }
 
-func TestBuildMachineHealthCheck_SingleNodeWaitsLonger(t *testing.T) {
+func TestBuildMachineHealthCheck_TimeoutIsSameForAnyReplicaCount(t *testing.T) {
 	claim := testClaim()
 	claim.Spec.HealthCheck = &v1alpha1.WorkerGroupHealthCheck{Enabled: true}
-	one := int32(1)
-	claim.Spec.Replicas = &one
 
-	for _, c := range BuildMachineHealthCheck(claim).Spec.Checks.UnhealthyNodeConditions {
-		if *c.TimeoutSeconds != 900 {
-			t.Errorf("single-node timeout for Ready=%s is %d, want 900", c.Status, *c.TimeoutSeconds)
+	for _, replicas := range []int32{1, 2, 5} {
+		r := replicas
+		claim.Spec.Replicas = &r
+		for _, c := range BuildMachineHealthCheck(claim).Spec.Checks.UnhealthyNodeConditions {
+			if *c.TimeoutSeconds != DefaultUnhealthyTimeoutSeconds {
+				t.Errorf("replicas=%d: timeout for Ready=%s is %d, want %d",
+					r, c.Status, *c.TimeoutSeconds, DefaultUnhealthyTimeoutSeconds)
+			}
 		}
 	}
+}
 
-	two := int32(2)
-	claim.Spec.Replicas = &two
+func TestSetUnhealthyTimeoutSeconds(t *testing.T) {
+	t.Cleanup(func() { SetUnhealthyTimeoutSeconds(DefaultUnhealthyTimeoutSeconds) })
+
+	SetUnhealthyTimeoutSeconds(120)
+	claim := testClaim()
+	claim.Spec.HealthCheck = &v1alpha1.WorkerGroupHealthCheck{Enabled: true}
+
 	for _, c := range BuildMachineHealthCheck(claim).Spec.Checks.UnhealthyNodeConditions {
-		if *c.TimeoutSeconds != 600 {
-			t.Errorf("multi-node timeout for Ready=%s is %d, want 600", c.Status, *c.TimeoutSeconds)
+		if *c.TimeoutSeconds != 120 {
+			t.Errorf("timeout for Ready=%s is %d, want 120", c.Status, *c.TimeoutSeconds)
 		}
 	}
 }
