@@ -1,8 +1,9 @@
 package builder
 
 import (
-	"k8s.io/apimachinery/pkg/util/intstr"
 	"testing"
+
+	"k8s.io/apimachinery/pkg/util/intstr"
 
 	corev1 "k8s.io/api/core/v1"
 
