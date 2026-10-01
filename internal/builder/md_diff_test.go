@@ -1,8 +1,9 @@
 package builder
 
 import (
-	"k8s.io/apimachinery/pkg/util/intstr"
 	"testing"
+
+	"k8s.io/apimachinery/pkg/util/intstr"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
